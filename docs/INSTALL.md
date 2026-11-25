@@ -42,10 +42,16 @@ GTAIV/
 ├── dinput8.dll           (FusionFix)
 ├── plugins/              (FusionFix)
 ├── ScriptHook.dll        (ScriptHook)
-├── GTAIV.FPV.asi         (this mod)
-├── GTAIV.FPV.core.dll    (this mod)
-└── libfpv.dll            (this mod)
+├── libfpv.asi            (this mod)
+└── libfpv/               (this mod)
+    ├── libfpv_gtaiv.dll
+    └── libfpv.dll
 ```
+
+**Updating from an older GTA IV FPV** (one with `GTAIV.FPV.asi`): extract
+the ZIP as above. On the next start the mod moves the old files into
+`GTAIV/libfpv/old`; that start still runs the old version, so restart the
+game once. You can delete `libfpv/old` afterwards.
 
 ## 5. Fly
 
@@ -53,14 +59,19 @@ Start the game, load a save and press **F7**. Niko launches the drone.
 
 | Key | Action |
 |---|---|
-| F7 | Launch the drone / return to Niko |
-| F8 | Settings: radio setup, rates, OSD, camera |
+| F7 | Launch the drone / end the flight / back to the drone after F |
+| F8 | Settings: radio setup, rates, OSD, camera, video feed, wind |
+| F | Back to Niko, the drone stays in the world (F7 returns to it) |
 | C | Cycle cameras: FPV, chase, line of sight |
 | R | Respawn the drone, repaired |
 | Y | Move Niko to the drone |
 
+F, C, R and Y can go on your radio too: F8 > Radio > "Set up game
+controls". Their keys can be changed in F8 > Controls.
+
 - **Radio:** plug it in (USB joystick mode), press F8 and follow the radio
-  setup wizard once. Your setup is remembered. Besides arm, it asks for
+  setup wizard once. Your setup is remembered, and shared with the other
+  libfpv games (it lives in `%APPDATA%\libfpv`). Besides arm, it asks for
   angle mode, beeper, turtle, air mode and OSD disable switches; skip any
   you don't want. OSD disable gives a clean picture for recording: no OSD
   and no game text.
@@ -91,15 +102,17 @@ settings are kept.
 
 ## Uninstalling
 
-Delete `GTAIV.FPV.asi`, `GTAIV.FPV.core.dll`, `GTAIV.FPV.core.live.dll`,
-`libfpv.dll`, `libfpv.LICENSE.txt`, `GTAIV.FPV.log` and the `fpv-data`
-folder.
+Delete `libfpv.asi` and the `libfpv` folder (and, from older versions,
+`fpv-data`). Your radio setup and tune stay in `%APPDATA%\libfpv` for the
+other libfpv games; delete that folder too to remove them.
 
 ## Something wrong?
 
 - **F7 does nothing:** check that `dinput8.dll` (step 2) and
-  `ScriptHook.dll` (step 3) are next to `GTAIV.exe`, and that the three
-  mod files are in the same folder, not in a subfolder.
-- **Anything else:** look in `GTAIV/GTAIV.FPV.log`, then
+  `ScriptHook.dll` (step 3) are next to `GTAIV.exe`, that `libfpv.asi` is
+  there too, and that `libfpv_gtaiv.dll` and `libfpv.dll` are in
+  `GTAIV/libfpv`.
+- **Anything else:** look in `GTAIV/libfpv/libfpv_gtaiv.log`, then
   [open an issue](https://github.com/hammerill/gtaiv-fpv/issues) and attach
-  that file.
+  that file. F8 > About > "Copy build info" copies the versions of the mod
+  and of libfpv for the report.

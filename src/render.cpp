@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -10,6 +11,8 @@
 #include "drone.h"
 #include "fpvapi.h"
 #include "log.h"
+#include "paths.h"
+#include "video.h"
 
 namespace render {
 namespace {
@@ -120,7 +123,7 @@ void setup_state(IDirect3DDevice9 *dev, float w, float h) {
     dev->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
 }
 
-void draw(IDirect3DDevice9 *dev, const fpv_draw_data &dd) {
+void draw(IDirect3DDevice9 *dev, const fpv_draw_data &dd, float sx = 1, float sy = 1) {
     for (uint32_t l = 0; l < dd.list_count; ++l) {
         const fpv_draw_list &list = dd.lists[l];
         g_vertices.resize(list.vertex_count);
@@ -128,12 +131,13 @@ void draw(IDirect3DDevice9 *dev, const fpv_draw_data &dd) {
             const fpv_draw_vertex &s = list.vertices[i];
             uint32_t c = s.color;  // ImGui ABGR -> D3D ARGB
             c = (c & 0xff00ff00u) | ((c & 0xffu) << 16) | ((c >> 16) & 0xffu);
-            g_vertices[i] = {s.pos[0] - 0.5f, s.pos[1] - 0.5f, 0.0f, 1.0f, c, s.uv[0], s.uv[1]};
+            g_vertices[i] = {s.pos[0] * sx - 0.5f, s.pos[1] * sy - 0.5f, 0.0f, 1.0f, c, s.uv[0], s.uv[1]};
         }
         for (uint32_t c = 0; c < list.command_count; ++c) {
             const fpv_draw_cmd &cmd = list.commands[c];
             if (!cmd.index_count || cmd.vertex_offset >= list.vertex_count) continue;
-            RECT clip = {LONG(cmd.clip_rect[0]), LONG(cmd.clip_rect[1]), LONG(cmd.clip_rect[2]), LONG(cmd.clip_rect[3])};
+            RECT clip = {LONG(cmd.clip_rect[0] * sx), LONG(cmd.clip_rect[1] * sy), LONG(cmd.clip_rect[2] * sx),
+                         LONG(cmd.clip_rect[3] * sy)};
             if (clip.right <= clip.left || clip.bottom <= clip.top) continue;
             dev->SetScissorRect(&clip);
             dev->SetTexture(0, texture(dev, cmd.texture_id));
@@ -148,8 +152,8 @@ void draw(IDirect3DDevice9 *dev, const fpv_draw_data &dd) {
 // pixel shader: each grid vertex at output position uv samples the copied
 // scene at c * (1 + k1 r2 + k2 r2^2) / zoom, with |c| = 1 at the corners.
 // The game drew the frame with the widened FOV from frame.camera.
-bool draw_lens(IDirect3DDevice9 *dev, IDirect3DSurface9 *backbuffer, const D3DSURFACE_DESC &desc,
-               const fpv_camera &cam) {
+// The finished game frame, copied into g_scene (the lens and the video feed sample it).
+bool copy_scene(IDirect3DDevice9 *dev, IDirect3DSurface9 *backbuffer, const D3DSURFACE_DESC &desc) {
     if (!g_scene || g_scene_w != desc.Width || g_scene_h != desc.Height || g_scene_format != desc.Format) {
         if (g_scene) g_scene->Release();
         g_scene = nullptr;
@@ -162,7 +166,12 @@ bool draw_lens(IDirect3DDevice9 *dev, IDirect3DSurface9 *backbuffer, const D3DSU
     if (FAILED(g_scene->GetSurfaceLevel(0, &copy))) return false;
     HRESULT hr = dev->StretchRect(backbuffer, nullptr, copy, nullptr, D3DTEXF_NONE);
     copy->Release();
-    if (FAILED(hr)) return false;
+    return SUCCEEDED(hr);
+}
+
+bool draw_lens(IDirect3DDevice9 *dev, IDirect3DSurface9 *backbuffer, const D3DSURFACE_DESC &desc,
+               const fpv_camera &cam) {
+    if (!copy_scene(dev, backbuffer, desc)) return false;
 
     const float w = float(desc.Width), h = float(desc.Height), a = w / h;
     const float sx = a / (0.5f * std::sqrt(a * a + 1)), sy = 1 / (0.5f * std::sqrt(a * a + 1));
@@ -235,13 +244,14 @@ bool draw_static(IDirect3DDevice9 *dev, float w, float h) {
     return true;
 }
 
-// Self-test screenshots: creating fpv-data/shot.txt saves the next finished
-// frame (with our passes) to fpv-data/shots/<time>.bmp and deletes the file.
+// Self-test screenshots: creating libfpv/shot.txt saves the next finished
+// frame (with our passes) to libfpv/shots/<time>.bmp and deletes the file.
 // Window capture from outside does not always work (a WSL in session 0).
 void save_screenshot(IDirect3DDevice9 *dev, IDirect3DSurface9 *backbuffer, const D3DSURFACE_DESC &desc) {
     static int frames = 0;
-    if (++frames % 10 != 0 || GetFileAttributesA("fpv-data\\shot.txt") == INVALID_FILE_ATTRIBUTES) return;
-    DeleteFileA("fpv-data\\shot.txt");
+    static const std::string trigger = paths::mod_file("shot.txt"), dir = paths::mod_file("shots");
+    if (++frames % 10 != 0 || GetFileAttributesA(trigger.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    DeleteFileA(trigger.c_str());
     IDirect3DSurface9 *rt = nullptr, *mem = nullptr;
     bool ok = SUCCEEDED(dev->CreateRenderTarget(desc.Width, desc.Height, D3DFMT_X8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE,
                                                 &rt, nullptr)) &&
@@ -251,11 +261,11 @@ void save_screenshot(IDirect3DDevice9 *dev, IDirect3DSurface9 *backbuffer, const
               SUCCEEDED(dev->GetRenderTargetData(rt, mem));
     D3DLOCKED_RECT lr;
     if (ok && SUCCEEDED(mem->LockRect(&lr, nullptr, D3DLOCK_READONLY))) {
-        CreateDirectoryA("fpv-data\\shots", nullptr);
+        CreateDirectoryA(dir.c_str(), nullptr);
         SYSTEMTIME t;
         GetLocalTime(&t);
         char path[MAX_PATH];
-        snprintf(path, sizeof path, "fpv-data\\shots\\%02d%02d%02d-%03d.bmp", t.wHour, t.wMinute, t.wSecond,
+        snprintf(path, sizeof path, "%s\\%02d%02d%02d-%03d.bmp", dir.c_str(), t.wHour, t.wMinute, t.wSecond,
                  t.wMilliseconds);
         if (FILE *f = std::fopen(path, "wb")) {
             BITMAPFILEHEADER fh{};
@@ -299,6 +309,172 @@ void feed_mouse(IDirect3DDevice9 *dev, float w, float h) {
         if (down != was[b]) fpv.fpv_overlay_mouse_button(b, down);
         was[b] = down;
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// The drone model, in the chase, LOS and pilot views (libfpv INTEGRATION.md
+// "The drone model"). GTA IV can't load a mod's model from a script hook, and
+// this pass runs after the frame, without the game's transforms or a depth
+// buffer we can trust. So it projects a low-poly 5" quad itself through the
+// camera the frame was rendered from (drone::ModelPose), sorts its triangles
+// back to front, and is skipped when the drone is behind something (a ray
+// from the camera, drone.cpp). No shadow: that would need the game's renderer.
+
+struct Tri {
+    float depth;
+    Vertex v[3];
+};
+std::vector<Tri> g_tris;
+
+struct Projector {
+    const drone::ModelPose &m;
+    float w, h, ty, tx;  // screen size, tan of the half FOVs
+    // body-local (right, forward, up), metres -> world
+    void world(const float l[3], float out[3]) const {
+        for (int i = 0; i < 3; ++i) out[i] = m.pos[i] + m.right[i] * l[0] + m.forward[i] * l[1] + m.up[i] * l[2];
+    }
+    // world -> screen; false behind the near plane
+    bool screen(const float p[3], Vertex &v, float &depth) const {
+        float d[3] = {p[0] - m.eye[0], p[1] - m.eye[1], p[2] - m.eye[2]};
+        float z = d[0] * m.eye_forward[0] + d[1] * m.eye_forward[1] + d[2] * m.eye_forward[2];
+        if (z < 0.05f) return false;
+        float x = d[0] * m.eye_right[0] + d[1] * m.eye_right[1] + d[2] * m.eye_right[2];
+        float y = d[0] * m.eye_up[0] + d[1] * m.eye_up[1] + d[2] * m.eye_up[2];
+        v.x = (0.5f + 0.5f * x / (z * tx)) * w - 0.5f;
+        v.y = (0.5f - 0.5f * y / (z * ty)) * h - 0.5f;
+        v.z = 0.5f;
+        v.rhw = 1.0f / z;
+        v.u = v.v = 0;
+        depth = z;
+        return true;
+    }
+};
+
+DWORD shade(DWORD argb, const float n_world[3], float light) {
+    // a sun from above and a little south-east, plus ambient
+    static const float kSun[3] = {0.35f, -0.35f, 0.87f};
+    float d = n_world[0] * kSun[0] + n_world[1] * kSun[1] + n_world[2] * kSun[2];
+    float k = (0.45f + 0.55f * (d > 0 ? d : 0)) * light;
+    auto ch = [&](int shift) { return DWORD(float((argb >> shift) & 0xff) * k) & 0xff; };
+    return (argb & 0xff000000u) | ch(16) << 16 | ch(8) << 8 | ch(0);
+}
+
+void add_tri(const Projector &pr, const float a[3], const float b[3], const float c[3], DWORD color, float light,
+             bool lit = true) {
+    float wa[3], wb[3], wc[3];
+    pr.world(a, wa), pr.world(b, wb), pr.world(c, wc);
+    float e1[3] = {wb[0] - wa[0], wb[1] - wa[1], wb[2] - wa[2]}, e2[3] = {wc[0] - wa[0], wc[1] - wa[1], wc[2] - wa[2]};
+    float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+    float nl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (nl < 1e-9f) return;
+    for (float &v : n) v /= nl;
+    // two-sided: face the normal to the camera
+    float to_eye = (pr.m.eye[0] - wa[0]) * n[0] + (pr.m.eye[1] - wa[1]) * n[1] + (pr.m.eye[2] - wa[2]) * n[2];
+    if (to_eye < 0)
+        for (float &v : n) v = -v;
+    Tri t;
+    float d0, d1, d2;
+    if (!pr.screen(wa, t.v[0], d0) || !pr.screen(wb, t.v[1], d1) || !pr.screen(wc, t.v[2], d2)) return;
+    DWORD c2 = lit ? shade(color, n, light) : color;
+    for (Vertex &v : t.v) v.color = c2;
+    t.depth = (d0 + d1 + d2) / 3;
+    g_tris.push_back(t);
+}
+
+// An axis-aligned box in body coordinates.
+void add_box(const Projector &pr, const float c[3], const float half[3], DWORD color, float light) {
+    float p[8][3];
+    for (int i = 0; i < 8; ++i)
+        for (int k = 0; k < 3; ++k) p[i][k] = c[k] + ((i >> k) & 1 ? half[k] : -half[k]);
+    static const int kFaces[6][4] = {{0, 2, 6, 4}, {1, 5, 7, 3}, {0, 4, 5, 1}, {2, 3, 7, 6}, {0, 1, 3, 2}, {4, 6, 7, 5}};
+    for (const auto &f : kFaces) {
+        add_tri(pr, p[f[0]], p[f[1]], p[f[2]], color, light);
+        add_tri(pr, p[f[0]], p[f[2]], p[f[3]], color, light);
+    }
+}
+
+// A thin bar from a to b (body coordinates), width w, height t.
+void add_bar(const Projector &pr, const float a[3], const float b[3], float w, float t, DWORD color, float light) {
+    float d[3] = {b[0] - a[0], b[1] - a[1], 0};
+    float l = std::sqrt(d[0] * d[0] + d[1] * d[1]);
+    if (l < 1e-4f) return;
+    float s[3] = {-d[1] / l * w * 0.5f, d[0] / l * w * 0.5f, 0};
+    float p[8][3];
+    for (int i = 0; i < 8; ++i) {
+        const float *e = (i & 1) ? b : a;
+        float side = (i & 2) ? 1.0f : -1.0f, up = (i & 4) ? t * 0.5f : -t * 0.5f;
+        for (int k = 0; k < 3; ++k) p[i][k] = e[k] + s[k] * side + (k == 2 ? up : 0);
+    }
+    static const int kFaces[6][4] = {{0, 1, 3, 2}, {4, 6, 7, 5}, {0, 4, 5, 1}, {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 5, 7, 3}};
+    for (const auto &f : kFaces) {
+        add_tri(pr, p[f[0]], p[f[1]], p[f[2]], color, light);
+        add_tri(pr, p[f[0]], p[f[2]], p[f[3]], color, light);
+    }
+}
+
+// A horizontal disc (the spinning prop's blur) or two blades.
+void add_prop(const Projector &pr, const float hub[3], float radius, float rpm, float spin, float light) {
+    if (rpm > 1500) {
+        const int kSeg = 16;
+        for (int i = 0; i < kSeg; ++i) {
+            float a0 = 6.2831853f * i / kSeg, a1 = 6.2831853f * (i + 1) / kSeg;
+            float p0[3] = {hub[0] + radius * std::cos(a0), hub[1] + radius * std::sin(a0), hub[2]};
+            float p1[3] = {hub[0] + radius * std::cos(a1), hub[1] + radius * std::sin(a1), hub[2]};
+            add_tri(pr, hub, p0, p1, 0xa0505058u, light, false);  // a grey blur, visible on dark roofs too
+        }
+        return;
+    }
+    for (int blade = 0; blade < 2; ++blade) {
+        float a = spin + blade * 3.14159265f;
+        float tip[3] = {hub[0] + radius * std::cos(a), hub[1] + radius * std::sin(a), hub[2]};
+        add_bar(pr, hub, tip, 0.012f, 0.002f, 0xff1a1a1au, light);
+    }
+}
+
+void draw_drone_model(IDirect3DDevice9 *dev, float w, float h) {
+    drone::ModelPose m;
+    if (!drone::model_pose(&m)) return;
+    Projector pr{m, w, h, std::tan(m.fov_y * 0.5f / 57.2957795f), 0};
+    pr.tx = pr.ty * w / h;
+    g_tris.clear();
+    const float light = m.light;
+    // body, battery on top, camera at the front
+    const float body[3] = {0, 0, 0}, body_half[3] = {0.035f, 0.07f, 0.018f};
+    const float pack[3] = {0, -0.005f, 0.035f}, pack_half[3] = {0.02f, 0.045f, 0.017f};
+    const float cam[3] = {0, 0.075f, 0.005f}, cam_half[3] = {0.012f, 0.008f, 0.012f};
+    add_box(pr, body, body_half, 0xff2a2a2eu, light);
+    add_box(pr, pack, pack_half, 0xffc8a020u, light);
+    add_box(pr, cam, cam_half, 0xff101010u, light);
+    for (int i = 0; i < 4; ++i) {
+        const float *hub = m.motor[i];
+        add_bar(pr, body, hub, 0.014f, 0.005f, 0xff222226u, light);
+        const float bell[3] = {hub[0], hub[1], hub[2] + 0.008f}, bell_half[3] = {0.011f, 0.011f, 0.01f};
+        add_box(pr, bell, bell_half, 0xff8a8a90u, light);
+        if (m.prop_gone[i]) continue;
+        const float prop[3] = {hub[0], hub[1], hub[2] + 0.02f};
+        add_prop(pr, prop, m.prop_radius, m.rpm[i], m.spin[i], light);
+    }
+    if (g_tris.empty()) return;
+    std::sort(g_tris.begin(), g_tris.end(), [](const Tri &a, const Tri &b) { return a.depth > b.depth; });
+    g_vertices.resize(g_tris.size() * 3);
+    for (size_t i = 0; i < g_tris.size(); ++i)
+        for (int k = 0; k < 3; ++k) g_vertices[i * 3 + k] = g_tris[i].v[k];
+    RECT full = {0, 0, LONG(w), LONG(h)};
+    dev->SetScissorRect(&full);
+    dev->SetTexture(0, nullptr);
+    dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
+    dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
+    dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, UINT(g_tris.size()), g_vertices.data(), sizeof(Vertex));
+    dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+    dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+}
+
+// Draws libfpv draw data (the OSD) for the video feed, which binds its own state.
+void draw_ui(IDirect3DDevice9 *dev, const fpv_draw_data &dd, float w, float h) {
+    setup_state(dev, w, h);
+    float dw = dd.display_size[0] > 0 ? dd.display_size[0] : w, dh = dd.display_size[1] > 0 ? dd.display_size[1] : h;
+    draw(dev, dd, w / dw, h / dh);
 }
 
 // Everything setup_state() and draw() change, so it can be put back.
@@ -378,7 +554,16 @@ struct SavedState {
 }  // namespace
 
 void frame(IDirect3DDevice9 *dev) {
-    if (!fpvapi::loaded()) return;
+    if (!fpvapi::loaded()) {
+        IDirect3DSurface9 *backbuffer = nullptr;
+        if (FAILED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer))) return;
+        D3DSURFACE_DESC desc;
+        backbuffer->GetDesc(&desc);
+        g_aspect = float(desc.Width) / float(desc.Height);
+        save_screenshot(dev, backbuffer, desc);
+        backbuffer->Release();
+        return;
+    }
 
     LARGE_INTEGER now, freq;
     QueryPerformanceCounter(&now);
@@ -402,10 +587,17 @@ void frame(IDirect3DDevice9 *dev) {
     bool no_signal = false;
     bool fpv_view = drone::osd_frame(&snapshot, &no_signal);
     bool lens = fpv_view && !no_signal && (snapshot.camera.distortion_k1 != 0 || snapshot.camera.distortion_k2 != 0);
-    if (fpv_view && (drone::tuning().osd || no_signal))
-        osd = fpv.fpv_osd_draw_data(&snapshot, w, h, FPV_OSD_STYLE_ANALOG);
+    bool want_osd = fpv_view && (drone::tuning().osd || no_signal);
+    // The video feed (the player turns it on in F8 > Camera): the goggles
+    // draw the lens and the OSD too. A lost feed is its own snow while the
+    // noise is on; with it off, our static stands in.
+    uint32_t feed = fpv_view ? video::flags(snapshot) : 0;
+    bool goggles = feed && (!no_signal || (feed & FPV_VIDEO_FEED_NOISE)) && video::usable();
+    if (want_osd && !goggles) osd = fpv.fpv_osd_draw_data(&snapshot, w, h, FPV_OSD_STYLE_ANALOG);
+    // Every frame, also with the overlay closed: libfpv's collision view draws through it.
     const fpv_draw_data *overlay = fpv.fpv_overlay_render(dt);
-    if (!lens && !no_signal && (!osd || !osd->list_count) && (!overlay || !overlay->list_count)) {
+    bool model = !fpv_view && drone::active();
+    if (!goggles && !lens && !no_signal && !model && (!osd || !osd->list_count) && (!overlay || !overlay->list_count)) {
         save_screenshot(dev, backbuffer, desc);
         backbuffer->Release();
         return;
@@ -414,6 +606,7 @@ void frame(IDirect3DDevice9 *dev) {
     // Draw straight onto the bound back buffer and restore exactly the state
     // we touch. A D3DSBT_ALL state block plus a render target / depth swap
     // here made the game's next frame flicker (stale regions, exposure jumps).
+    // (fpv_video_d3d9.h takes a state block of its own: only while the feed is on.)
     IDirect3DSurface9 *rt = nullptr;
     dev->GetRenderTarget(0, &rt);
     bool on_backbuffer = rt == backbuffer;
@@ -426,11 +619,22 @@ void frame(IDirect3DDevice9 *dev) {
     SavedState saved;
     saved.save(dev);
     setup_state(dev, w, h);
-    if (lens && !draw_lens(dev, backbuffer, desc, snapshot.camera)) {
+    if (model) draw_drone_model(dev, w, h);
+    if (goggles && !(copy_scene(dev, backbuffer, desc) &&
+                     video::draw(dev, g_scene, nullptr, desc.Width, desc.Height, desc.Width, desc.Height, snapshot,
+                                 want_osd, &draw_ui))) {
+        static int reported = 0;
+        if (reported++ < 3) fpvlog::write("render: video feed pass failed: the plain view instead");
+        goggles = false;
+        setup_state(dev, w, h);
+        if (want_osd) osd = fpv.fpv_osd_draw_data(&snapshot, w, h, FPV_OSD_STYLE_ANALOG);
+    }
+    if (goggles) setup_state(dev, w, h);  // for the overlay
+    if (!goggles && lens && !draw_lens(dev, backbuffer, desc, snapshot.camera)) {
         static int reported = 0;
         if (reported++ < 3) fpvlog::write("render: fisheye pass failed (format %d)", int(desc.Format));
     }
-    if (no_signal && !draw_static(dev, w, h)) {
+    if (!goggles && no_signal && !draw_static(dev, w, h)) {
         static int reported = 0;
         if (reported++ < 3) fpvlog::write("render: static pass failed");
     }
@@ -444,6 +648,7 @@ void frame(IDirect3DDevice9 *dev) {
 float aspect() { return g_aspect; }
 
 void release() {
+    video::release();
     if (g_scene) g_scene->Release();
     g_scene = nullptr;
     g_scene_w = g_scene_h = 0;

@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 
@@ -78,6 +79,8 @@ bool g_checked = false;
 Pool **g_pools[3] = {};
 void *g_exclude = nullptr;         // phInst the probes ignore
 void *g_exclude_entity = nullptr;  // and anything else of this entity (peds have more than one inst)
+void *g_exclude_entity2 = nullptr; // a second ped (the stand-in at home), every inst of it
+bool g_near_now = false, g_near_last = false;  // moving_thing_near()
 
 bool resolve() {
     if (g_checked) return g_probe != nullptr;
@@ -120,7 +123,7 @@ int ground_only(const float origin[3], const float dir[3], float max_distance, f
     hit->normal[0] = 0;
     hit->normal[1] = 0;
     hit->normal[2] = 1;
-    hit->material = 0;
+    hit->material = kMaterialGround;
     hit->object_id = 0;
     return 1;
 }
@@ -186,14 +189,22 @@ int raycast(void *, const float origin[3], const float dir[3], float max_distanc
         // buildings, vehicles, peds, objects.
         if (!g_probe(*g_level, &seg, &is, g_exclude, kTypeAll, -1, 7, 1, 0)) return 0;
         entity = entity_of(is.inst);
-        if (!g_exclude_entity || entity != g_exclude_entity || attempt == 8) break;
-        // Hit the ignored ped through another of its instances: continue past it.
+        bool ignored = entity && (entity == g_exclude_entity || entity == g_exclude_entity2);
+        if (!ignored || attempt == 8) break;
+        // Hit an ignored ped (through another of its instances): continue past it.
         seg.a = {is.position.x + dir[0] * 0.25f, is.position.y + dir[1] * 0.25f, is.position.z + dir[2] * 0.25f, 0};
     }
-    if (entity && entity == g_exclude_entity) return 0;
+    if (entity && (entity == g_exclude_entity || entity == g_exclude_entity2)) return 0;
 
     float dx = is.position.x - origin[0], dy = is.position.y - origin[1], dz = is.position.z - origin[2];
     float distance = dx * dir[0] + dy * dir[1] + dz * dir[2];
+    if (!std::isfinite(distance)) {  // a hit without a position: libfpv would turn it into NaN wind
+        static int reported = 0;
+        if (reported++ < 5)
+            fpvlog::write("world: probe hit with no usable position (%g %g %g), ignored", is.position.x,
+                          is.position.y, is.position.z);
+        return 0;
+    }
     if (distance < 0 || distance > max_distance) return 0;
 
     const Vec4 &n = usable_normal(is.normal_a, dir) ? is.normal_a : is.normal_b;
@@ -218,9 +229,106 @@ int raycast(void *, const float origin[3], const float dir[3], float max_distanc
         hit->normal[2] = n.z;
     }
     hit->distance = distance;
-    hit->material = 0;
+    if (distance < 3.0f && (kind_of(object_id) == Kind::Vehicle || kind_of(object_id) == Kind::Ped))
+        g_near_now = true;
+    hit->material = kind_of(object_id) == Kind::Vehicle ? kMaterialVehicle : kMaterialGround;
     hit->object_id = object_id;
     return 1;
+}
+
+namespace {
+
+// Poses handed out this tick, by object_id: libfpv wants the same one for
+// every ray that hits the same thing in a tick.
+struct Pose {
+    uint32_t id;
+    float pos[3], rot[4];
+};
+std::vector<Pose> g_poses;
+
+// The pose of a vehicle, ped or object as the game has it now. Only the
+// heading goes into the rotation: its convention is certain (degrees,
+// counter-clockwise about +Z), and turning is what carries a perched drone.
+bool pose_of(uint32_t object_id, float pos[3], float rot[4]) {
+    uint32_t h = handle_of(object_id);
+    float heading = 0;
+    switch (kind_of(object_id)) {
+        case Kind::Vehicle:
+            if (!h || !sh::call<bool>(N("DOES_VEHICLE_EXIST"), h)) return false;
+            sh::call(N("GET_CAR_COORDINATES"), h, &pos[0], &pos[1], &pos[2]);
+            sh::call(N("GET_CAR_HEADING"), h, &heading);
+            break;
+        case Kind::Ped:
+            if (!h || !sh::call<bool>(N("DOES_CHAR_EXIST"), h)) return false;
+            sh::call(N("GET_CHAR_COORDINATES"), h, &pos[0], &pos[1], &pos[2]);
+            sh::call(N("GET_CHAR_HEADING"), h, &heading);
+            break;
+        case Kind::Object:
+            if (!h || !sh::call<bool>(N("DOES_OBJECT_EXIST"), h)) return false;
+            sh::call(N("GET_OBJECT_COORDINATES"), h, &pos[0], &pos[1], &pos[2]);
+            sh::call(N("GET_OBJECT_HEADING"), h, &heading);
+            break;
+        default:
+            return false;
+    }
+    float a = heading * 0.5f / 57.2957795f;
+    rot[0] = 0, rot[1] = 0, rot[2] = std::sin(a), rot[3] = std::cos(a);
+    return true;
+}
+
+}  // namespace
+
+void new_tick() {
+    g_poses.clear();
+    g_near_last = g_near_now;
+    g_near_now = false;
+}
+
+bool moving_thing_near() { return g_near_last || g_near_now; }
+
+int raycast_ex(void *user, const float origin[3], const float dir[3], float max_distance, fpv_raycast_hit_ex *hit) {
+    // libfpv sets struct_size: write no field past it
+    if (!raycast(user, origin, dir, max_distance, &hit->hit)) return 0;
+    if (hit->struct_size < offsetof(fpv_raycast_hit_ex, object_rotation) + sizeof hit->object_rotation) return 1;
+    hit->flags = 0;
+    uint32_t id = hit->hit.object_id;
+    if (!handle_of(id)) return 1;
+    for (const Pose &p : g_poses)
+        if (p.id == id) {
+            std::memcpy(hit->object_position, p.pos, sizeof p.pos);
+            std::memcpy(hit->object_rotation, p.rot, sizeof p.rot);
+            hit->flags = FPV_RAYCAST_HIT_POSE;
+            return 1;
+        }
+    Pose p{id, {}, {}};
+    if (!pose_of(id, p.pos, p.rot)) return 1;
+    g_poses.push_back(p);
+    std::memcpy(hit->object_position, p.pos, sizeof p.pos);
+    std::memcpy(hit->object_rotation, p.rot, sizeof p.rot);
+    hit->flags = FPV_RAYCAST_HIT_POSE;
+    return 1;
+}
+
+std::vector<uint32_t> vehicles() {
+    std::vector<uint32_t> out;
+    if (!resolve()) return out;
+    Pool *pool = g_pools[1] ? *g_pools[1] : nullptr;  // kPools[1]: vehicles
+    if (!pool || !pool->flags) return out;
+    for (uint32_t i = 0; i < pool->count; ++i) {
+        uint8_t flag = pool->flags[i];
+        if (flag & 0x80) continue;  // free slot
+        out.push_back(i << 8 | flag);
+    }
+    return out;
+}
+
+void *ped_entity(uint32_t ped_handle) {
+    return ped_handle && resolve() ? entity_from_handle(Kind::Ped, ped_handle) : nullptr;
+}
+
+void ignore_second_ped(uint32_t ped_handle) {
+    g_exclude_entity2 = ped_handle && resolve() ? entity_from_handle(Kind::Ped, ped_handle) : nullptr;
+    if (ped_handle) fpvlog::write("world: probes also ignore ped %u (entity %p)", ped_handle, g_exclude_entity2);
 }
 
 void ignore_ped(uint32_t ped_handle) {

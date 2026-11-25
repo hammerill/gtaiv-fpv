@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <mutex>
 
+#include "paths.h"
+
 namespace fpvlog {
 
 void write(const char *fmt, ...) {
@@ -13,10 +15,11 @@ void write(const char *fmt, ...) {
     // The loader and the core both write this file, so both append; only the
     // loader starts it afresh.
     static FILE *file = [] {
+        std::string path = paths::mod_file("libfpv_gtaiv.log");
 #ifndef FPVLOG_APPEND
-        if (FILE *f = std::fopen("GTAIV.FPV.log", "w")) std::fclose(f);
+        if (FILE *f = std::fopen(path.c_str(), "w")) std::fclose(f);
 #endif
-        return std::fopen("GTAIV.FPV.log", "a");
+        return std::fopen(path.c_str(), "a");
     }();
     if (!file) return;
 

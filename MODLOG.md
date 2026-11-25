@@ -304,14 +304,123 @@ world collision, impacts that ragdoll/damage peds and vehicles.
   `respawn`/`recall`/`hold`, `dur=<s>`. Pilot visibility untouched (out of scope for IV).
   Built against libfpv with the new header; NOT tested in game.
 
+- 2026-11-25: **Synced with libfpv 1.1.3 (HEAD 936dad3) and its current INTEGRATION.md**, ~95 libfpv commits since
+  the last sync (ff2479f). Built (no warnings) and deployed; NOT run in game (the user tests).
+  - Naming ("Label the mod libfpv"): `GTAIV/libfpv.asi` + `GTAIV/libfpv/{libfpv_gtaiv.dll, libfpv.dll, log, autotest.txt,
+    shot.txt, shots/}` (rdr2-fpv's layout). Exports `libfpv_gtaiv_*`. The loader moves `GTAIV.FPV.*`, the root
+    `libfpv.dll`/LICENSE into `libfpv/old` on its first tick and stays idle that session if `GTAIV.FPV.asi` is loaded.
+  - Data: `fpv_shared_data_dir()` (%APPDATA%\libfpv), copying `GTAIV/fpv-data` only if the shared folder doesn't exist
+    yet (on the dev PC it already exists, so the GTA IV settings were NOT copied: the other game's setup wins).
+  - About tab: host_name/host_build/host_url; `cmake/build_info.cmake` writes the commit on every build.
+  - All modern functions are now required in fpvapi (shipped together); kamikaze stays optional.
+  - Video feed: libfpv's `docs/renderers/fpv_video_d3d9.h` via `src/video.cpp` (copied from gtasa-fpv), shaders
+    compiled on a thread; `FPV_INIT_VIDEO_FEED` only when d3dcompiler_47.dll loads. Falls back to the grid lens.
+    lens_fov uses the feed's picture aspect with the resolution effect. Own static only when the noise is off.
+  - Game controls (`fpv_controls_set`): gtaiv.camera C, gtaiv.respawn R, gtaiv.pilot_view F, gtaiv.move_niko Y,
+    INSTANT. All letters/digits now go to `fpv_input_key` by scan code; typed text via ToUnicodeEx ->
+    `fpv_overlay_text`. In the pilot view keys reach libfpv only while the overlay is open (+F8).
+  - Pilot view (F): scripted cam off (`ACTIVATE_SCRIPTED_CAMS false`), `SET_CAM_BEHIND_PED`, Niko's control back
+    once F (scan 0x21) is up, HUD shown, `fpv_set_view(PILOT)`, listener = GET_GAME_CAM pos/rot -> quaternion
+    (Rz Ry Rx inverse of basis_to_euler). F7 from there returns to the drone. Respawn after F: in front of Niko now.
+  - Stand-in replaces the 80/40 m anchor: `fpv_pilot_set_support(STAND_IN|POSE, 20, 10)`, distances from
+    `fpv_pilot_get_config`. Niko frozen/invisible/no collision at the drone, NOT ignored by AI any more,
+    `SET_CHAR_COORDINATES_NO_OFFSET` with BONE_SPINE1 (0x4B3) on the drone (self-correcting offset), health held at
+    1000 and every loss -> `fpv_drone_damage_props`. A copy (`CREATE_CHAR` type 0 with his model and the 11
+    component variations, invincible, never targetted) stands at home, or at the wheel of his car (car frozen past
+    100 m). Refused (Niko stays home) as a passenger or in a car on a mission. Respawn waits up to 10 ticks for the
+    frame to show the spawn before the distances count.
+  - Pose: `cellphone`/`cellphone_text` (TASK_PLAY_ANIM loop) on Niko or the copy with FPV_DRONE_RADIO_ACTIVE, not in a
+    car, not in the pilot view; hand-over copies GET/SET_CHAR_ANIM_CURRENT_TIME. Anim names were found by decrypting
+    pc/anim/anim.img's TOC (AES key located in GTAIV.exe by its SHA-1) and hashing candidates against
+    cellphone.wad: cellphone_in/out/talk/text exist; amb@tourist_camera / amb@newspaper_* names unknown.
+  - Wind: GET_CURRENT_WEATHER -> 1.5..11 m/s towards the NE (IV has no wind direction), helis with a driver from the
+    vehicle pool -> rotor sources (mass 2500 kg, radius from GET_MODEL_DIMENSIONS), explosions within 60 m located
+    with IS_EXPLOSION_IN_SPHERE probes -> `fpv_wind_add_blast`; the warhead's own blast directly. ENCLOSED while
+    Niko stands in inside an interior.
+  - Damage: GET_WATER_HEIGHT(x,y,z,&h) per hub (1/s) + drag push (k 6/s) on the centre; fires within 1.5 m
+    (0.5/s); explosion within 4 m (1, once); a piloted heli's rotor disc (1).
+  - Raycast: `fpv_world_set_raycast_callback_ex` with FPV_RAYCAST_HIT_POSE for vehicles/peds/objects (position +
+    heading-only quaternion, cached per tick); materials 1 ground (friction 0.6), 2 vehicle paint (0.5). The probe
+    ignores the copy too.
+  - Drone model: procedural quad (body, battery, camera, arms, motors, blur discs > 1500 rpm, blades, broken props
+    hidden) projected in render.cpp through the frame's camera, painter-sorted, hidden when a ray from the camera
+    hits first; darker at night (GET_TIME_OF_DAY). No shadow.
+  - No game UI in the drone's views: HIDE_HUD_AND_RADAR + HIDE_HELP_TEXT + CLEAR_PRINTS every tick (not just with
+    the OSD switch). Kamikaze default ending length 2 s. Kamikaze removed from README (dev-gatekept per the doc).
+  - Every native name in src/ was checked against the ScriptHook SDK's hash table (99/99).
+
+- 2026-11-25 23:30-23:52: **First in-game run of the sync (user report: "a lot of buggy stuff" on F7, then a crash).**
+  - **Frame layout bug (root cause of most of it):** CMake defined LIBFPV_KAMIKAZE for the mod while the shipped
+    libfpv.dll is plain. libfpv.h then makes FPV_CHANNEL_COUNT 12, not 10, so every fpv_frame field after
+    `channels` (OSD grid, impacts, wind, video_feed...) was read 8 bytes off: frame.wind showed `x 0 nan`, impacts
+    named wrong entities. Older builds had the same define (fewer fields after channels then). Now kamikaze is the
+    CMake option GTAIV_FPV_KAMIKAZE (OFF); plain builds compile the kamikaze code out (stand-in types in
+    kamikaze.h), and fpvapi refuses a libfpv.dll of the other kind with a log line. gtasa-fpv likely has the same
+    bug (it also defines LIBFPV_KAMIKAZE unconditionally).
+  - Stand-in thrash: the shared settings (%APPDATA%\libfpv) had standInDistance 5 / return 5 from another game:
+    Niko and his copy swapped every few frames. The return distance is now capped at 0.6x the start distance.
+  - world::raycast drops hits with a non-finite distance (logged).
+  - Loader: vectored exception handler logs fault address, module+offset and module return addresses on the stack
+    ("crash?"). At startup it logs two harmless first-chance AVs from ScriptHookDotNet's CLR.
+  - **Verified in game (self-tested, autotest + WinDrive keys):** video feed with 4:3 bars, analog look and aligned
+    OSD; wind sane (~2.5-3 m/s NE); stand-in starts once at 5 m and holds through a 45 s flight 120 m out (city
+    streams), Niko back home at the end; copy + pose logged; C -> chase view with the drone model drawn at the
+    right place (small at 2 m; prop discs made brighter); F -> game camera on Niko with HUD/radar, he walks
+    (WinDrive needs `scanmode on`: the game reads DirectInput); F7 -> back to the goggles, stand-in resumes; car and
+    wall impacts during the stand-in; a hot reload mid-session. No crash in ~6 flights after the layout fix (the
+    one crash seen came after the layout-bug session; not reproduced since).
+  - The F8 overlay showed up open during one flight without a logged F8; not reproduced (maybe the user's key).
+
+- 2026-11-25 23:55: **Kamikaze dev machine.** This PC has LIBFPV_KAMIKAZE_DEV=1 (~/.zshrc; libfpv CLAUDE.md "Kamikaze dev
+  machines"): every local build and deploy is kamikaze. GTAIV_FPV_KAMIKAZE now defaults to ON when the variable is
+  1/true (rdr2-fpv's pattern); CI doesn't set it, so release builds stay plain. deploy.sh picks
+  libfpv/build/win32-kamikaze on such a machine and refuses a mod/libfpv kamikaze mismatch. The existing build/ was
+  reconfigured with -DGTAIV_FPV_KAMIKAZE=ON (a cached OFF isn't changed by the new default). Rebuilt libfpv's
+  win32-kamikaze at HEAD and deployed it. The in-game runs above were with the plain build.
+  - User report from their first (layout-bug) session: picture all purple and frozen for seconds until an impact
+    (the misread video_feed), F8 overlay opening by itself (seen once by me too). Every forwarded F8 press is now
+    logged with GetAsyncKeyState, to tell a real F8 (another app, a radio that is also a keyboard?) from a bug.
+
+- 2026-11-26 00:00: **Crash at the stand-in's start found and fixed.** User crash (kamikaze build, real radio) 8 ms after
+  "stand-in: Niko goes to the drone": null read in GTAIV.exe+0x9f969a = memcpy (rep movsb) of 0x370 bytes from a null
+  source, called by the CDrawPedDC constructor (RTTI `.?AVCDrawPedDC@@`, vtable RVA 0xa818b0; ctor 0x4dafc0, built
+  at 0x5e30xx from ped+0x254 only when the object at ped+0x238 checks out, else null): a ped drawn without its data.
+  The start changed two peds in one frame (CLEAR_CHAR_TASKS_IMMEDIATELY on the visible Niko, a new ped on his spot,
+  an instant-blend anim on it). Now: tick N Niko hidden/frozen/no collision and moved (no immediate task clear),
+  N+1 the copy created hidden, N+2 shown and posed (blend 8, phase set once it plays). 4 autotest runs in a row
+  (start + end each), no crash. The user's first-session crash came at the same moment.
+  - Shared settings: standInReturnDistance 5 -> 1 m at the user's request (backup settings.json.bak-before-standin).
+    The game's defaults (fpv_pilot_set_support) are 20 m / 10 m.
+
+- 2026-11-26 00:20: **No copy of Niko; the stand-in is the whole flight.** The crash at the stand-in's start was the
+  copy (its CPed address was on the crashing stack). CPed+0x219 comes from the ped's creation info (CPed ctor
+  0x5e26a0 copies it): 1 for the player's ped, 0 for CREATE_CHAR's. The ped draw code (0x5e2e60..) sends a
+  player-model ped with +0x219 == 0 down the streamed-variation path (CDrawPedDC from the +0x238 block, which the
+  player model never fills) -> null memcpy at 0x9f969a. Writing 1 into the copy's +0x219 sent it down the player
+  path, which crashed at GTAIV.exe+0x60b9a2 reading null+0x384 (player-only data). So a script-made Niko can't be
+  drawn. User's choice: stand-in on = Niko hidden at the drone from launch to the end of the flight (distances
+  ignored, no swaps, no copy, no pose); off = Niko home in the pose. Respawn keeps him at the drone (LOAD_SCENE at
+  the spawn) and spawns in front of his home spot. Also: hit cars/peds vanished (impacts on 0x2.../0x1... with no
+  effect logged): probably the game removing what the hidden player was inside; Niko is now lifted 2.5 m while a
+  drone probe sees a car/ped within 3 m (world::moving_thing_near), and effects logs "no longer exists". Pose:
+  pilot::hold adopts a pose already playing instead of restarting it.
+
 ## Next session — start here
-0. Test the new ending in game with a kamikaze libfpv (autotest `boom` + `signal`/`cutscene` x `respawn`/`recall`/
-   `hold`, and R/F7/Y during the view); ask the user about the hiss level and grenade size.
-0. Ask the user how the streaming anchor and the two fixes (spawn under ground, OSD after Load) went; commit.
-0a. Ask the user to check the OSD disable switch (help boxes/subtitles gone) and the GPS home arrow (points at Niko).
-0b. Ask the user how the fisheye, HUD hiding and Move Niko here feel with the real radio (fisheye default strength?).
+0. Ask the user how the fixed build flies with the real radio. Still not checked in game:
+   - the stand-in: does SET_CHAR_COORDINATES_NO_OFFSET move a frozen Niko, does the copy appear (CREATE_CHAR with
+     the player model) in his clothes, does the AI shoot at the drone (log "damage: Niko standing in lost"), does
+     Niko land back on his feet / in his car;
+   - the pose (cellphone_text) on Niko and the copy, and its seamless hand-over;
+   - the pilot view: game camera back, F not entering a car, F7 back to the drone, listener panning;
+   - the drone model's projection (SET_CAM_FOV assumed vertical) and the pilot view's GET_CAM_ROT order;
+   - the video feed (F8 > Camera > Video feed) and the OSD in the signal;
+   - the controls in F8 > Controls / radio setup; the overlay's text fields;
+   - water damage + drag, wind strength, explosion blasts, heli downwash;
+   - the old-install clean-up (libfpv/old) on the user's machine.
 1. Check the overlay with real mouse use (GTA may clip/hide the cursor; GetCursorPos may stick) - needs the user.
 2. Polish: frame.altitude -1 when > a few m up (libfpv probe range?); tune effect strengths with the user.
-3. Prop body (visible drone model for chase/LOS cams), audio (fpv_audio_read -> XAudio2/waveOut).
-4. Self-test with scratchpad run_test.sh (recreate from the MODLOG notes if the scratchpad is gone).
-5. Delete GTAIV/fpv-data/autotest.txt before handing the game back to the user.
+3. Not done (no way found yet): the game's own sounds heard from the pilot (FPV_DRONE_HEARD_FROM_PILOT; IV has no
+   listener native), game sounds for reactions (frontend sound names unknown besides GENERAL_GPS_BONG), Esc that
+   closes the overlay also reaching the pause menu, a game-rendered drone model with a shadow, hurting peds through
+   a damage event naming the player (IV's DAMAGE_CHAR has no attacker).
+4. Delete GTAIV/libfpv/autotest.txt before handing the game back to the user.

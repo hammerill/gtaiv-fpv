@@ -1,5 +1,5 @@
 // One-shot reverse-engineering aid: logs native handler addresses and dumps the
-// game's in-memory image (fpv-data/recon/gtaiv-image.bin) so the engine's line
+// game's in-memory image (libfpv/recon/gtaiv-image.bin) so the engine's line
 // test can be found offline. Handlers are logged on every start; the dump is
 // written once (delete it to dump again).
 #include "recon.h"
@@ -14,7 +14,7 @@
 namespace recon {
 
 void run_once() {
-    const char *dump_path = "fpv-data\\recon\\gtaiv-image.bin";
+    const char *dump_path = "libfpv\\recon\\gtaiv-image.bin";
     auto base = reinterpret_cast<uint8_t *>(GetModuleHandleA(nullptr));
     auto dos = reinterpret_cast<IMAGE_DOS_HEADER *>(base);
     auto nt = reinterpret_cast<IMAGE_NT_HEADERS32 *>(base + dos->e_lfanew);
@@ -37,8 +37,8 @@ void run_once() {
     }
 
     if (GetFileAttributesA(dump_path) != INVALID_FILE_ATTRIBUTES) return;
-    CreateDirectoryA("fpv-data", nullptr);
-    CreateDirectoryA("fpv-data\\recon", nullptr);
+    CreateDirectoryA("libfpv", nullptr);
+    CreateDirectoryA("libfpv\\recon", nullptr);
 
     // Copy readable pages; unreadable ones are left as zeros.
     FILE *f = std::fopen(dump_path, "wb");

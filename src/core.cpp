@@ -1,5 +1,5 @@
-// GTA IV FPV drone mode, powered by libfpv. This is GTAIV.FPV.core.dll; the
-// GTAIV.FPV.asi loader calls it every script tick and hot-reloads it.
+// GTA IV FPV drone mode, powered by libfpv. This is libfpv/libfpv_gtaiv.dll;
+// the libfpv.asi loader calls it every script tick and hot-reloads it.
 #include <windows.h>
 
 #include "autotest.h"
@@ -7,6 +7,7 @@
 #include "log.h"
 #include "recon.h"
 #include "render.h"
+#include "video.h"
 
 namespace {
 
@@ -34,15 +35,16 @@ void tick() {
 
 }  // namespace
 
-extern "C" __declspec(dllexport) void gtaiv_fpv_core_tick() { tick(); }
+extern "C" __declspec(dllexport) void libfpv_gtaiv_tick() { tick(); }
 
 // The loader's D3D hook, on the render thread.
-extern "C" __declspec(dllexport) void gtaiv_fpv_core_render(IDirect3DDevice9 *dev) { render::frame(dev); }
-extern "C" __declspec(dllexport) void gtaiv_fpv_core_release_d3d() { render::release(); }
+extern "C" __declspec(dllexport) void libfpv_gtaiv_render(IDirect3DDevice9 *dev) { render::frame(dev); }
+extern "C" __declspec(dllexport) void libfpv_gtaiv_release_d3d() { render::release(); }
 
 // Called before the loader unloads this core: leave nothing pointing into it.
-extern "C" __declspec(dllexport) void gtaiv_fpv_core_unload() {
-    if (drone::active()) drone::toggle();
+extern "C" __declspec(dllexport) void libfpv_gtaiv_unload() {
+    while (drone::active()) drone::toggle();  // from the pilot view: back to the drone, then down
     autotest::abort();
+    video::shutdown();  // the shader compile thread runs our code
     fpvlog::write("core unloaded");
 }

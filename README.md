@@ -14,65 +14,68 @@ turtle mode behave as they do on a real quad.
   your radio once in the F8 overlay's wizard. Betaflight Configurator can
   connect too.
 - **Three cameras**: FPV (the goggles view, with a fisheye lens), chase and
-  line of sight from where Niko stands.
+  line of sight from where Niko stands. In chase and line of sight you see
+  the quad itself, props spinning (or broken).
+- **Real goggles**: libfpv's video feed (F8 > Camera > Video feed) with
+  analog noise, sparklies, torn and rolling lines and snow as the signal
+  fades behind buildings, the camera's resolution and 4:3 picture with black
+  bars, and the OSD written into the signal. Needs `d3dcompiler_47.dll`
+  (part of Windows 10/11); without it the plain fisheye view is used.
+- **Back to Niko (F)**: the view goes back to Niko while the drone stays in
+  the world, still flown by the radio. Walk or drive; F7 goes back to the
+  drone. The drone sound is heard from Niko then.
+- **Niko stands in for the drone**: with the stand-in on (F8 > Fly > Pilot,
+  the default), Niko goes along with the drone, hidden, for the whole
+  flight, so the city streams around it and the police and gangs see, chase
+  and shoot it. What hurts him breaks props. Nobody stays at the launch
+  spot: GTA IV can't draw a script-made copy of Niko (it crashes the game),
+  and the stand-in distances in that menu aren't used. With the stand-in
+  off, Niko stays where you launched, head down over his phone (the "radio")
+  whenever you touch the sticks.
+- **Wind** from the weather (calm when sunny, a storm in thunderstorms),
+  sheltered by buildings, plus helicopter downwash and explosion blasts.
+- **Water, fire, explosions and rotors** break props; the drone sinks into
+  water instead of bouncing off it.
 - **Betaflight OSD** in the FPV view: battery, cell voltage, current, flight
   timer and mode. The GPS elements work too (speed, altitude, vario, distance
   flown, home arrow and distance); turn them on in Configurator's OSD tab.
   Home is Niko, so the arrow always points back to him.
 - **Collides with the world**: buildings, the road, cars, peds and props, all
   through the engine's own physics probe. Crashes break props and burn
-  motors.
+  motors. It can perch on a car roof and ride along.
 - **Crash effects**: a fast hit knocks a ped over (ragdoll and damage), dents
   a car or shoves a prop.
-- **Motor sound** from libfpv's synthesizer.
-- **Clean view**: the minimap and HUD are hidden while you fly. Put
-  Betaflight's OSD disable on a switch (the radio wizard asks for one) to
-  hide the OSD, help boxes and subtitles too, for recording. Subtitles that
-  appear while the switch is on are skipped. Mission markers and other
-  things drawn in the world stay.
+- **Drone sound** from libfpv: motors and Betaflight's beeps, in stereo,
+  onboard in FPV and chase, heard from Niko (distance, walls, Doppler) in
+  line of sight and the F view; F8 > Camera & sound changes it.
+- **Clean view**: the minimap, HUD, help boxes and subtitles are hidden
+  while you fly; the only thing over the picture is Betaflight's OSD.
+  Subtitles printed during the flight are skipped (GTA IV can't hide them
+  for a frame). Put Betaflight's OSD disable on a switch (the radio wizard
+  asks for one) to hide the OSD too, for recording. Mission markers and
+  other things drawn in the world stay. In the pilot view (F) the HUD is back.
 - **Move Niko here**: ends the flight with Niko standing where the drone is,
   facing the way it faced.
-- **Kamikaze** (only with a kamikaze build of libfpv, see below): the drone
-  carries a warhead. A detonation sets off a grenade-sized GTA explosion
-  where it happened. Then either the goggles show static with "SIGNAL LOST"
-  (the game's HUD and text hidden), or an outside camera shows the blast
-  ("Cutscene"), for 3 seconds by default. After that a new drone waits at
-  the launch spot (respawn), the flight ends and you control Niko again
-  (recall), or the view stays until you act (nothing). Pick all three in
-  libfpv's F8 > Kamikaze tab. During the view, R (respawn), F7 (back to
-  Niko) and Y (Move Niko here) work at once.
-
-## Kamikaze
-
-Build libfpv with `-DLIBFPV_KAMIKAZE=ON` and put that `libfpv.dll` in
-`GTAIV/`. The mod finds the warhead functions at runtime, so the same
-`GTAIV.FPV.core.dll` works with both builds. With a normal libfpv the kamikaze
-parts are switched off. The log says which build is loaded: "kamikaze build"
-or "no warhead". The release ZIP ships the normal build.
-
-The rules are libfpv's. Arm the motors with the bomb switch (AUX7) off. Take
-off and flip the switch, and after the arming delay (OSD `ARMING 3`, then
-`STEADY`) the warhead is live. Once it is live, any touch sets it off, and so
-does the explode switch (AUX8). Without a radio, K toggles the bomb switch
-and X held is the explode switch. On a gamepad, X/Square toggles the bomb
-switch and the right shoulder button is the explode switch. Payload, arming
-delay, fuse sensitivity and the ending are in F8 > Kamikaze, saved by libfpv
-in `GTAIV/fpv-data/settings.json`. The ending timer runs on game time, so it
-waits while the pause menu is open.
 
 ## Controls
 
 | Key | Action |
 |---|---|
-| F7 | Launch the drone / return to Niko |
-| F8 | Settings overlay (radio setup, rates, OSD, camera, fisheye strength) |
+| F7 | Launch the drone / end the flight back at Niko / from the F view, back to the drone |
+| F8 | Settings overlay (radio setup, rates, OSD, camera, video feed, wind, pilot) |
+| F | Back to Niko, the drone left flying (F7 returns to it) |
 | C | Cycle cameras: FPV, chase, line of sight |
-| R | Respawn the drone at its launch point, repaired |
+| R | Respawn the drone, repaired (in front of Niko after you used F) |
 | Y | Move Niko here (also a button in F8 > Fly) |
+
+F, C, R and Y are libfpv game controls: put them on your radio's switches or
+buttons in F8 > Radio > "Set up game controls", or change their keys in
+F8 > Controls. Letters are read by their position on the keyboard (a US
+layout's), so on AZERTY the keyboard sticks stay under your left hand.
 
 Without a radio, the keyboard works as a fallback. Enter arms, W/S is
 throttle, A/D is yaw, and the arrow keys are pitch and roll. A gamepad works
-too.
+too. In the F view the keyboard walks Niko, so it doesn't fly the drone then.
 
 Fisheye strength and FOV are in F8 > Camera & sound. A strength of 0 turns
 the lens off.
@@ -98,17 +101,25 @@ text comes from `docs/INSTALL.md`. To rebuild with a newer libfpv without a
 mod change, run the Release workflow by hand from the Actions tab.
 
 The ZIP holds these files, which go into the `GTAIV/` folder next to
-`GTAIV.exe`:
+`GTAIV.exe`. They are named after libfpv, as every libfpv game labels its
+mod:
 
 | File | What it is |
 |---|---|
-| `GTAIV.FPV.asi` | Loader that the ASI loader picks up |
-| `GTAIV.FPV.core.dll` | The mod itself (hot-reloaded by the loader) |
-| `libfpv.dll` | libfpv, i686 build |
-| `libfpv.LICENSE.txt` | libfpv's license (GPL-3.0-or-later) |
+| `libfpv.asi` | Loader that the ASI loader picks up |
+| `libfpv/libfpv_gtaiv.dll` | The mod itself (hot-reloaded by the loader) |
+| `libfpv/libfpv.dll` | libfpv, i686 build |
+| `libfpv/libfpv.LICENSE.txt`, `libfpv/LICENSE.txt` | libfpv's and the mod's license (GPL-3.0-or-later) |
 
-Settings, radio mappings and Betaflight EEPROMs go in `GTAIV/fpv-data/`. The
-log is `GTAIV/GTAIV.FPV.log`.
+Settings, radio mappings and Betaflight EEPROMs are in libfpv's shared
+folder, `%APPDATA%\libfpv`, so your radio setup and tune follow you to the
+other libfpv games. The first start copies an older version's
+`GTAIV/fpv-data` there, unless another libfpv game already made the folder.
+The log is `GTAIV/libfpv/libfpv_gtaiv.log`.
+
+Updating from a version with `GTAIV.FPV.asi`: the new loader moves the old
+files (`GTAIV.FPV.*`, the old `libfpv.dll`) into `GTAIV/libfpv/old` on its
+first start. That one start still runs the old version; restart the game.
 
 ## Building
 
@@ -116,16 +127,14 @@ The build needs CMake 3.24 or newer and the i686 MinGW-w64 toolchain
 (`i686-w64-mingw32-g++-posix`). It cross-compiles from Linux or WSL.
 
 ```sh
-# libfpv, 32-bit (from the libfpv checkout); add -DLIBFPV_KAMIKAZE=ON for the warhead
+# libfpv, 32-bit (from the libfpv checkout)
 cmake -S . -B build/win32 -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/mingw-w64-i686.cmake
 cmake --build build/win32 -j
 
 # this mod
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-i686.cmake
 cmake --build build
-./deploy.sh   # copies the asi, the core and libfpv.dll into ../GTAIV
-# or with a kamikaze libfpv built in build/win32-kamikaze:
-LIBFPV_DLL=~/Projects/libfpv/build/win32-kamikaze/libfpv.dll ./deploy.sh
+./deploy.sh   # copies libfpv.asi into ../GTAIV, the core and libfpv.dll into ../GTAIV/libfpv
 ```
 
 `LIBFPV_DIR` (default `~/Projects/libfpv`) and `LIBFPV_BUILD` point the
@@ -134,7 +143,8 @@ loads `libfpv.dll` at runtime.
 
 If you run `./deploy.sh` while the game is running, the new core reloads
 within about a second. The `.asi` and `libfpv.dll` stay locked until the
-game exits.
+game exits. The build writes the commit into libfpv's F8 > About tab
+(`GTAIV_FPV_VERSION` names the version, CI sets `build-<n>`).
 
 ## How it works
 
@@ -152,11 +162,26 @@ game exits.
   probe (found by reverse engineering 1.2.0.59). A hit is mapped back to its
   ped, vehicle or object through the entity pools.
 - **Drawing.** ScriptHook's D3D9 hook calls `src/render.cpp` after the game
-  finishes a frame. For the fisheye, the back buffer is copied to a texture
-  and drawn back through a 64x36 grid warped with libfpv's Brown-Conrady
-  parameters, so no shader compiler is needed. The FOV is widened for the
-  real screen aspect so that the edges still show the FOV you chose. The OSD
-  and the overlay are drawn on top as textured triangles.
+  finishes a frame. With the video feed on, the back buffer goes through
+  libfpv's `docs/renderers/fpv_video_d3d9.h` (`src/video.cpp`, ps_3_0
+  shaders compiled at runtime). Otherwise the fisheye is a 64x36 grid warped
+  with libfpv's Brown-Conrady parameters, no shaders needed. The FOV is
+  widened for the real picture aspect so that the edges still show the FOV
+  you chose. The OSD and the overlay are drawn on top as textured triangles.
+  The drone model is a small procedural quad projected through the frame's
+  camera (`render.cpp`), hidden when a ray from the camera hits something
+  first; it has no shadow.
+- **Standing in.** With the stand-in on, Niko is moved to the drone at launch
+  (hidden, frozen, no collision, spine on the drone, lifted clear while a car
+  or ped is right next to it, his health topped up and every loss turned
+  into broken props) and back home when the flight ends or on F
+  (`src/drone.cpp`). The pose is `cellphone`/`cellphone_text` from the game,
+  on Niko when he stays home.
+- **Wind and damage.** `src/wind.cpp` maps `GET_CURRENT_WEATHER` to a mean
+  wind (GTA IV has no wind direction: it blows towards the north-east),
+  helicopters with a pilot to rotor sources and explosions (found with
+  `IS_EXPLOSION_IN_SPHERE`) to blasts. `src/damage.cpp` does water
+  (`GET_WATER_HEIGHT`, drag and per-prop damage), fire, explosions and rotors.
 - **Audio.** A waveOut thread plays `fpv_audio_read`.
 
 `MODLOG.md` is the development journal. It records addresses, decisions and
@@ -164,19 +189,16 @@ what was verified in game.
 
 ## Testing without hands
 
-`GTAIV/fpv-data/autotest.txt` turns on a scripted test. It moves Niko to a
+`GTAIV/libfpv/autotest.txt` turns on a scripted test. It moves Niko to a
 road, launches the drone and flies a fixed stick sequence, logging
 everything. Knobs: `car`/`ped` (crash target), `hover`, `still`, `cam`
 (camera-axis test), `niko` (end with Move Niko here), `secs=`, `fov=`,
-`near=`, `osd=`, `osdoff` (fly with the OSD disable switch on), and with a
-kamikaze libfpv `boom` (arm the warhead in flight and hit the target),
-`boomsw` (air burst with the explode switch), and to force an ending
-`signal`/`cutscene` (the view), `respawn`/`recall`/`hold` (what follows) and
-`dur=<s>` (its length). **Delete the file afterwards.** Otherwise every game start
+`near=`, `osd=`, `osdoff` (fly with the OSD disable switch on).
+**Delete the file afterwards.** Otherwise every game start
 runs the test.
 
-Creating `GTAIV/fpv-data/shot.txt` saves the next finished frame, with the
-mod's own drawing, to `GTAIV/fpv-data/shots/<time>.bmp`. This works when
+Creating `GTAIV/libfpv/shot.txt` saves the next finished frame, with the
+mod's own drawing, to `GTAIV/libfpv/shots/<time>.bmp`. This works when
 window capture can't see the game.
 
 ## Credits

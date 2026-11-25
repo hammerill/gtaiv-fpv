@@ -35,6 +35,7 @@ const char *then_name(fpv_kamikaze_ending_then t) {
 Ending ending() {
     Ending e;
     if (!fpvapi::kamikaze()) return e;
+#if defined(LIBFPV_KAMIKAZE)
     // An older libfpv copies only the fields it knows: the rest keep the defaults.
     fpv_kamikaze_config kc{};
     kc.struct_size = sizeof kc;
@@ -47,6 +48,7 @@ Ending ending() {
     e.then = kc.ending_then == FPV_KAMIKAZE_THEN_RECALL    ? FPV_KAMIKAZE_THEN_RECALL
              : kc.ending_then == FPV_KAMIKAZE_THEN_NOTHING ? FPV_KAMIKAZE_THEN_NOTHING
                                                            : FPV_KAMIKAZE_THEN_RESPAWN;
+#endif
     return e;
 }
 
@@ -54,6 +56,7 @@ void init() {
     if (g_ready || !fpvapi::kamikaze()) return;
     g_ready = true;
     fpv.fpv_overlay_set_action(kOldEndingAction, nullptr);  // left by an older core before a hot reload
+#if defined(LIBFPV_KAMIKAZE)
     // GTA IV does every ending: Niko is there to recall to.
     if (fpv.fpv_kamikaze_set_ending_support) {
         uint32_t views = (1u << FPV_KAMIKAZE_VIEW_SIGNAL_LOST) | (1u << FPV_KAMIKAZE_VIEW_CUTSCENE);
@@ -63,8 +66,9 @@ void init() {
                                                            FPV_KAMIKAZE_THEN_RESPAWN);
         if (r != FPV_OK) fpvlog::write("fpv_kamikaze_set_ending_support: %s", fpv.fpv_result_string(r));
     } else {
-        fpvlog::write("kamikaze: libfpv.dll has no ending choice, using signal lost / 3 s / respawn");
+        fpvlog::write("kamikaze: libfpv.dll has no ending choice, using signal lost / 2 s / respawn");
     }
+#endif
     Ending e = ending();
     fpvlog::write("kamikaze: after the blast: %s for %.1f s, then %s", view_name(e.view), e.seconds,
                   then_name(e.then));

@@ -1,4 +1,4 @@
-// Unattended test scenario, enabled by creating GTAIV/fpv-data/autotest.txt
+// Unattended test scenario, enabled by creating GTAIV/libfpv/autotest.txt
 // and re-run whenever that file is touched. Moves the player to the nearest
 // road, sweeps the world probe around him, then launches the drone and flies
 // a fixed stick sequence, logging everything.
@@ -12,7 +12,9 @@
 #include <cstring>
 
 #include "drone.h"
+#include "kamikaze.h"
 #include "log.h"
+#include "paths.h"
 #include "scripthook.h"
 #include "world.h"
 
@@ -38,7 +40,7 @@ bool g_cam_mode = false;  // "cam": camera rotation-order test instead of a flig
 // (what follows it) and dur=<s> (its length), instead of the player's choice.
 void read_config() {
     char buf[256] = {};
-    if (FILE *f = std::fopen("fpv-data\\autotest.txt", "r")) {
+    if (FILE *f = std::fopen(paths::mod_file("autotest.txt").c_str(), "r")) {
         std::fread(buf, 1, sizeof buf - 1, f);
         std::fclose(f);
     }
@@ -74,7 +76,7 @@ FILETIME g_trigger_time{};
 // True when autotest.txt appeared or was touched since the last run.
 bool triggered() {
     WIN32_FILE_ATTRIBUTE_DATA data;
-    if (!GetFileAttributesExA("fpv-data\\autotest.txt", GetFileExInfoStandard, &data)) return false;
+    if (!GetFileAttributesExA(paths::mod_file("autotest.txt").c_str(), GetFileExInfoStandard, &data)) return false;
     if (CompareFileTime(&data.ftLastWriteTime, &g_trigger_time) == 0) return false;
     g_trigger_time = data.ftLastWriteTime;
     return true;
@@ -191,7 +193,7 @@ void sticks(float t) {
         g_hold_z = f.position[2] + (tu.long_range ? 35.0f : tu.hover ? 2.5f : kHoldHeight);
     // "far" climbs first; "boom" waits for the warhead to go live (6.5 s)
     const float cruise_at = tu.long_range ? 12.0f : tu.bomb ? 7.0f : 5.0f;
-    float ch[FPV_CHANNEL_COUNT] = {0, 0, -1, 0, -1, 1, -1, -1, -1, tu.osd_off ? 1.0f : -1.0f, -1, -1};
+    float ch[12] = {0, 0, -1, 0, -1, 1, -1, -1, -1, tu.osd_off ? 1.0f : -1.0f, -1, -1};  // AUX7/8: kamikaze builds
     if (!drone::tuning().armed_flight) {  // parked: a still image for flicker checks
         drone::inject_channels(ch);
         return;

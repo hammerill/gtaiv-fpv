@@ -48,8 +48,14 @@ uint32_t player_ped() {
     return ped;
 }
 
+void report_gone(const char *what, uint32_t handle, float speed) {
+    static int reported = 0;
+    if (reported++ < 30) fpvlog::write("effects: hit %s %u at %.1f m/s, but it no longer exists", what, handle, speed);
+}
+
 bool hit_ped(uint32_t ped, float speed, const float push[3]) {
-    if (ped == player_ped() || !sh::call<bool>(N("DOES_CHAR_EXIST"), ped)) return false;
+    if (ped == player_ped()) return false;
+    if (!sh::call<bool>(N("DOES_CHAR_EXIST"), ped)) return report_gone("ped", ped, speed), false;
     if (speed < kPedRagdollSpeed) return false;
     sh::call(N("SWITCH_PED_TO_RAGDOLL"), ped, 1000u, 3000u, 0u, 1u, 1u, 0u);
     sh::call(N("DAMAGE_CHAR"), ped, uint32_t(speed * kPedDamagePerMs), false);
@@ -62,7 +68,8 @@ bool hit_ped(uint32_t ped, float speed, const float push[3]) {
 }
 
 bool hit_vehicle(uint32_t car, float speed, const float push[3]) {
-    if (!sh::call<bool>(N("DOES_VEHICLE_EXIST"), car) || speed < kCarDamageSpeed) return false;
+    if (!sh::call<bool>(N("DOES_VEHICLE_EXIST"), car)) return report_gone("car", car, speed), false;
+    if (speed < kCarDamageSpeed) return false;
     sh::call(N("APPLY_FORCE_TO_CAR"), car, 3u, push[0], push[1], push[2], 0.0f, 0.0f, 0.0f, 0u, 1u, 1u, 1u);
     uint32_t health = 0;
     sh::call(N("GET_CAR_HEALTH"), car, &health);

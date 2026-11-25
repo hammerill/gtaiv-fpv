@@ -1,6 +1,7 @@
 # Every push to main builds the mod and the latest libfpv for 32-bit Windows
 # and publishes gtaiv-fpv.zip as a new GitHub release. The ZIP's contents go
-# straight into the GTAIV folder; docs/INSTALL.md becomes the release page.
+# straight into the GTAIV folder (libfpv.asi, and the libfpv/ folder);
+# docs/INSTALL.md becomes the release page.
 # Run it by hand (Actions > Release > Run workflow) to pick up a new libfpv.
 name: Release
 
@@ -45,6 +46,8 @@ jobs:
           cmake --build libfpv/build/win32 -j"$(nproc)"
 
       - name: Build the mod
+        env:
+          GTAIV_FPV_VERSION: build-${{ github.run_number }}
         run: |
           cmake -S gtaiv-fpv -B gtaiv-fpv/build \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/gtaiv-fpv/cmake/mingw-w64-i686.cmake" \
@@ -54,10 +57,12 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist/pkg
-          cp gtaiv-fpv/build/GTAIV.FPV.asi gtaiv-fpv/build/GTAIV.FPV.core.dll libfpv/build/win32/libfpv.dll dist/pkg/
-          cp libfpv/LICENSE dist/pkg/libfpv.LICENSE.txt
-          (cd dist/pkg && zip -9 ../gtaiv-fpv.zip *)
+          mkdir -p dist/pkg/libfpv
+          cp gtaiv-fpv/build/libfpv.asi dist/pkg/
+          cp gtaiv-fpv/build/libfpv_gtaiv.dll libfpv/build/win32/libfpv.dll dist/pkg/libfpv/
+          cp libfpv/LICENSE dist/pkg/libfpv/libfpv.LICENSE.txt
+          cp gtaiv-fpv/LICENSE dist/pkg/libfpv/LICENSE.txt
+          (cd dist/pkg && zip -9 -r ../gtaiv-fpv.zip .)
           unzip -l dist/gtaiv-fpv.zip
 
       - name: Publish the release
