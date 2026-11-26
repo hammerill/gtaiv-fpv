@@ -37,8 +37,10 @@ constexpr float kWarheadBlastRadius = 3.0f; // the warhead is grenade-sized (kam
 constexpr float kStandInHealth = 1000.0f;  // Niko's health while he stands in, topped up every tick
 constexpr float kAimFallback = 0.35f;      // spine above the root, m, until the bones are known
 constexpr float kPlaceStep = 0.25f;        // re-place Niko once the drone moved this far from him
-constexpr float kCarHoldDistance = 100.0f;
-constexpr float kNearThingLift = 2.5f;     // m, Niko's spine above the drone while a car or ped is near it       // the return distance is at most this share of the start distance // past this the ground under his car may stream out: hold it
+constexpr float kCarHoldDistance = 100.0f;  // past this the ground under his car may stream out: hold it
+constexpr float kNearThingLift = 2.5f;     // m, Niko's spine above the drone while a car or ped is near it
+constexpr uint32_t kRadioOff = 255;        // GET_PLAYER_RADIO_STATION_INDEX with no station playing
+constexpr int kRadioRetunes = 3;           // at most this many retunes per stand-in (no static loop)
 
 using fpvapi::fpv;
 
@@ -86,6 +88,18 @@ struct Ending {
 };
 Ending g_ending;
 
+// A new drone waits on its spawn until the ground's collision is there: after
+// a respawn far from where the drone was, the spot has streamed out, and a
+// drone let go at once fell through the road (libfpv's raycast is the game's
+// collision probe). Until a probe finds the ground it is put back on the spot
+// every tick; then it starts on the ground the probe found.
+constexpr float kGroundWaitMax = 3.0f;  // s, then it is let go anyway (logged)
+struct GroundWait {
+    bool on = false;
+    float elapsed = 0;
+};
+GroundWait g_ground_wait;
+
 // The game streams map detail, LODs, collision, traffic and its AI around
 // Niko. Past the stand-in distance, Niko goes to the drone (invisible,
 // frozen, without collision) and the world treats the drone as him: the city
@@ -97,6 +111,10 @@ struct StandIn {
     uint32_t niko = 0;
     uint32_t car = 0;    // the car he drove, 0 on foot
     bool car_held = false;
+    bool car_was_mission = false;  // a script already owned it: leave its status alone
+    uint32_t radio = kRadioOff;    // the station his car played, kept on as the mobile radio
+    bool mobile_radio_before = false;
+    int radio_retunes = 0;
     float home[3];       // his root (GET_CHAR_COORDINATES) at the spot
     float heading;
     float at[3];         // the drone position he was last placed for
@@ -407,6 +425,59 @@ const char *stand_in_refusal(uint32_t ped) {
     return nullptr;
 }
 
+// His car while he stands in (libfpv INTEGRATION.md "Flying from a car"): the
+// population removes cars far from the player, even the one he drove, so it
+// is a mission car until the stand-in ends.
+void keep_car(StandIn &s) {
+    s.car_was_mission = sh::call<bool>(N("IS_CAR_A_MISSION_CAR"), s.car);
+    if (!s.car_was_mission) sh::call(N("SET_CAR_AS_MISSION_CAR"), s.car);
+}
+
+// go_home false: Move Niko here, which puts the car down at the drone itself.
+void release_car(StandIn &s, bool go_home) {
+    if (s.car_held) {
+        sh::call(N("FREEZE_CAR_POSITION"), s.car, false);
+        // an empty car isn't simulated: back on its wheels before it moves again
+        if (go_home) sh::call(N("SET_CAR_ON_GROUND_PROPERLY"), s.car);
+        s.car_held = false;
+    }
+    if (!s.car_was_mission) {
+        uint32_t car = s.car;  // the native clears the handle it is given
+        sh::call(N("MARK_CAR_AS_NO_LONGER_NEEDED"), &car);
+    }
+}
+
+// The car radio goes off the moment the player leaves his car. It isn't
+// positional, so the game's on-foot (mobile) radio carries the same station
+// on while he stands in, and the car's takes it back when he is in it again.
+void keep_radio(StandIn &s) {
+    s.radio = sh::call<uint32_t>(N("GET_PLAYER_RADIO_STATION_INDEX"));
+    if (s.radio == kRadioOff) return;
+    s.mobile_radio_before = sh::call<bool>(N("IS_MOBILE_PHONE_RADIO_ACTIVE"));
+    sh::call(N("SET_MOBILE_RADIO_ENABLED_DURING_GAMEPLAY"), true);
+    sh::call(N("SET_MOBILE_PHONE_RADIO_STATE"), true);
+    fpvlog::write("stand-in: car radio (station %u) kept on as the mobile radio", s.radio);
+}
+
+// Every tick while he stands in: the radio stays on, on his station.
+void update_radio(StandIn &s) {
+    if (s.radio == kRadioOff) return;
+    if (!sh::call<bool>(N("IS_MOBILE_PHONE_RADIO_ACTIVE"))) sh::call(N("SET_MOBILE_PHONE_RADIO_STATE"), true);
+    uint32_t now = sh::call<uint32_t>(N("GET_PLAYER_RADIO_STATION_INDEX"));
+    if (now != s.radio && s.radio_retunes < kRadioRetunes && !sh::call<bool>(N("IS_RADIO_RETUNING"))) {
+        ++s.radio_retunes;
+        fpvlog::write("stand-in: radio on station %u, back to %u", now, s.radio);
+        sh::call(N("RETUNE_RADIO_TO_STATION_INDEX"), s.radio);
+    }
+}
+
+// After he is back in his car (or not, if it is gone).
+void release_radio(StandIn &s) {
+    if (s.radio == kRadioOff || s.mobile_radio_before) return;
+    sh::call(N("SET_MOBILE_PHONE_RADIO_STATE"), false);
+    sh::call(N("SET_MOBILE_RADIO_ENABLED_DURING_GAMEPLAY"), false);
+}
+
 void standin_begin(const float drone_pos[3]) {
     uint32_t ped = niko();
     if (const char *why = stand_in_refusal(ped)) {
@@ -420,7 +491,11 @@ void standin_begin(const float drone_pos[3]) {
     sh::call(N("GET_CHAR_HEADING"), ped, &s.heading);
     if (sh::call<bool>(N("IS_CHAR_IN_ANY_CAR"), ped)) sh::call(N("GET_CAR_CHAR_IS_USING"), ped, &s.car);
     // the pose goes over to the copy where it is, so the hand-over doesn't show
-    if (s.car) sh::call(N("WARP_CHAR_FROM_CAR_TO_COORD"), ped, drone_pos[0], drone_pos[1], drone_pos[2]);
+    if (s.car) {
+        keep_car(s);
+        keep_radio(s);  // before he gets out, so it doesn't stop in between
+        sh::call(N("WARP_CHAR_FROM_CAR_TO_COORD"), ped, drone_pos[0], drone_pos[1], drone_pos[2]);
+    }
     pilot::forget(ped);  // he keeps whatever he plays, hidden at the drone
     uint32_t health = 0;
     sh::call(N("GET_CHAR_HEALTH"), ped, &health);
@@ -436,8 +511,9 @@ void standin_begin(const float drone_pos[3]) {
                   s.home[0], s.home[1], s.home[2], s.car, s.health_before, s.expected_health);
 }
 
-// Niko comes back from the drone: to his spot (and his car), or (go_home
-// false, Move Niko here) he stays where he is.
+// Niko comes back from the drone: to his spot, or (go_home false, Move Niko
+// here) he stays where he is. From a car he is back at the wheel either way,
+// so Move Niko here takes the car along.
 void standin_end(bool go_home) {
     StandIn &s = g_standin;
     if (!s.on) return;
@@ -445,18 +521,31 @@ void standin_end(bool go_home) {
     uint32_t ped = s.niko;
     set_stand_in_state(ped, false);
     sh::call(N("SET_CHAR_HEALTH"), ped, uint32_t(s.health_before > 100 ? s.health_before : 200));
-    bool car = s.car && sh::call<bool>(N("DOES_VEHICLE_EXIST"), s.car);
-    if (car && s.car_held) sh::call(N("FREEZE_CAR_POSITION"), s.car, false);
+    bool car = s.car && sh::call<bool>(N("DOES_VEHICLE_EXIST"), s.car) && !sh::call<bool>(N("IS_CHAR_DEAD"), ped) &&
+               !sh::call<bool>(N("IS_CAR_DEAD"), s.car);
+    if (car) {
+        if (go_home) {  // its ground back first: it may have been pushed off the spot
+            float c[3];
+            sh::call(N("GET_CAR_COORDINATES"), s.car, &c[0], &c[1], &c[2]);
+            sh::call(N("LOAD_SCENE"), c[0], c[1], c[2]);
+        }
+        sh::call(N("WARP_CHAR_INTO_CAR"), ped, s.car);
+        release_car(s, go_home);
+        release_radio(s);  // after he is in: the car's radio takes the station over
+        bool in = sh::call<bool>(N("IS_CHAR_IN_CAR"), ped, s.car);
+        fpvlog::write("stand-in: over, Niko back in car %u%s%s", s.car, go_home ? "" : " (it goes to the drone)",
+                      in ? "" : " (FAILED)");
+        return;
+    }
+    if (s.car && sh::call<bool>(N("DOES_VEHICLE_EXIST"), s.car)) release_car(s, go_home);
+    release_radio(s);
     if (!go_home) {
         fpvlog::write("stand-in: over, Niko stays at the drone");
         return;
     }
     const float *h = s.home;
     sh::call(N("LOAD_SCENE"), h[0], h[1], h[2]);
-    if (car) {
-        sh::call(N("WARP_CHAR_INTO_CAR"), ped, s.car);
-        fpvlog::write("stand-in: over, Niko back in car %u", s.car);
-    } else {
+    {
         sh::call(N("SET_CHAR_COORDINATES"), ped, h[0], h[1], h[2]);
         sh::call(N("SET_CHAR_HEADING"), ped, s.heading);
         fpvlog::write("stand-in: over, Niko back at %.2f %.2f %.2f%s", h[0], h[1], h[2],
@@ -485,10 +574,13 @@ void standin_update(const fpv_frame &f) {
         bool hold = dist(f.position, s.home) > kCarHoldDistance;
         if (hold != s.car_held) {
             sh::call(N("FREEZE_CAR_POSITION"), s.car, hold);
+            // an empty car isn't simulated: back on its wheels before it moves again
+            if (!hold) sh::call(N("SET_CAR_ON_GROUND_PROPERLY"), s.car);
             s.car_held = hold;
             fpvlog::write("stand-in: car %u %s", s.car, hold ? "held (the drone is far)" : "free");
         }
     }
+    update_radio(s);
     // What hurts Niko at the drone hurts the drone; he himself doesn't die of it.
     uint32_t health = 0;
     sh::call(N("GET_CHAR_HEALTH"), s.niko, &health);
@@ -625,6 +717,7 @@ void start() {
     }
 #endif
     g_ending = Ending{};
+    g_ground_wait = GroundWait{true, 0};
     g_standin = StandIn{};
     g_standin_refused_logged = false;
     float home[3] = {pilot[0], pilot[1], pilot[2]};
@@ -680,6 +773,7 @@ void stop(bool go_home = true) {
     }
     fpv.fpv_set_view(FPV_VIEW_FPV);
     g_ending = Ending{};
+    g_ground_wait = GroundWait{};
     g_have_frame = false;
     {
         std::lock_guard<std::mutex> lock(g_osd_mutex);
@@ -790,7 +884,14 @@ void end_ending() {
 void respawn() {
     end_ending();
     if (g_standin.on) {  // Niko stays with the drone; its new spot must be streamed in
-        sh::call(N("LOAD_SCENE"), g_spawn_pos[0], g_spawn_pos[1], g_spawn_pos[2]);
+        float spot[3];
+        if (g_pilot_moved) {  // the spawn is measured from his home spot: stream that first
+            for (int i = 0; i < 3; ++i) spot[i] = g_standin.home[i];
+        } else {
+            for (int i = 0; i < 3; ++i) spot[i] = g_spawn_pos[i];
+        }
+        sh::call(N("REQUEST_COLLISION_AT_POSN"), spot[0], spot[1], spot[2]);
+        sh::call(N("LOAD_SCENE"), spot[0], spot[1], spot[2]);
     }
     if (g_pilot_moved) {
         float pilot[3], heading;
@@ -800,7 +901,36 @@ void respawn() {
     }
     fpv.fpv_drone_repair(g_drone);
     fpv.fpv_drone_reset(g_drone, g_spawn_pos, g_spawn_rot);
+    if (g_standin.on) place_niko(g_spawn_pos);  // the streaming goes there now, not with the next frames
+    g_ground_wait = GroundWait{true, 0};
     damage::reset();
+}
+
+// Every tick before the drone's step while a new drone waits for its ground.
+void wait_for_ground(float dt) {
+    GroundWait &w = g_ground_wait;
+    if (!w.on) return;
+    sh::call(N("REQUEST_COLLISION_AT_POSN"), g_spawn_pos[0], g_spawn_pos[1], g_spawn_pos[2]);
+    float origin[3] = {g_spawn_pos[0], g_spawn_pos[1], g_spawn_pos[2] + 1.0f}, down[3] = {0, 0, -1};
+    fpv_raycast_hit hit{};
+    if (world::raycast(nullptr, origin, down, 4.0f, &hit)) {
+        float z = origin[2] - hit.distance;
+        bool moved = std::fabs(z - g_spawn_pos[2]) > 0.02f;
+        g_spawn_pos[2] = z;
+        if (moved || w.elapsed > 0) fpv.fpv_drone_reset(g_drone, g_spawn_pos, g_spawn_rot);
+        if (w.elapsed > 0 || moved)
+            fpvlog::write("spawn: ground there after %.2f s, drone on it at %.2f", w.elapsed, z);
+        w.on = false;
+        return;
+    }
+    w.elapsed += dt;
+    if (w.elapsed >= kGroundWaitMax) {
+        fpvlog::write("spawn: no ground under %.2f %.2f %.2f after %.1f s, drone let go", g_spawn_pos[0],
+                      g_spawn_pos[1], g_spawn_pos[2], w.elapsed);
+        w.on = false;
+        return;
+    }
+    fpv.fpv_drone_reset(g_drone, g_spawn_pos, g_spawn_rot);  // held on the spot meanwhile
 }
 
 // F: the view goes back to Niko, who walks and drives again; the drone stays
@@ -959,17 +1089,22 @@ void move_niko_here() {
     fpv_raycast_hit hit{};
     bool ground = world::raycast(nullptr, origin, down, 300.0f, &hit) != 0;
     float z = ground ? origin[2] - hit.distance : pos[2];
-    stop(false);
-    uint32_t ped = niko();
+    stop(false);  // from a car he is back in it: the car comes along
+    uint32_t ped = niko(), car = 0;
+    if (sh::call<bool>(N("IS_CHAR_IN_ANY_CAR"), ped)) sh::call(N("GET_CAR_CHAR_IS_USING"), ped, &car);
     sh::call(N("LOAD_SCENE"), pos[0], pos[1], z);  // near clips stream little
-    if (sh::call<bool>(N("IS_CHAR_IN_ANY_CAR"), ped))
-        sh::call(N("WARP_CHAR_FROM_CAR_TO_COORD"), ped, pos[0], pos[1], z + 1.0f);
-    else
+    if (car) {
+        sh::call(N("SET_CAR_COORDINATES"), car, pos[0], pos[1], z + 1.0f);
+        sh::call(N("SET_CAR_HEADING"), car, heading);
+        sh::call(N("SET_CAR_ON_GROUND_PROPERLY"), car);
+        sh::call(N("SET_CAR_FORWARD_SPEED"), car, 0.0f);
+    } else {
         sh::call(N("SET_CHAR_COORDINATES"), ped, pos[0], pos[1], z + 1.0f);
-    sh::call(N("SET_CHAR_HEADING"), ped, heading);
+        sh::call(N("SET_CHAR_HEADING"), ped, heading);
+    }
     sh::call(N("SET_CAM_BEHIND_PED"), ped);
-    fpvlog::write("moved Niko to the drone: %.2f %.2f %.2f (ground %s) heading %.1f", pos[0], pos[1], z,
-                  ground ? "hit" : "missed", heading);
+    fpvlog::write("moved Niko%s to the drone: %.2f %.2f %.2f (ground %s) heading %.1f", car ? " and his car" : "",
+                  pos[0], pos[1], z, ground ? "hit" : "missed", heading);
 }
 
 const fpv_frame &last_frame() { return g_frame; }
@@ -1094,6 +1229,7 @@ void tick() {
     if (g_standin.on) sh::call(N("GET_INTERIOR_FROM_CHAR"), g_standin.niko, &interior);
     wind::update(dt, at, interior != 0);
     world::new_tick();
+    wait_for_ground(dt);
 
     fpv_frame frame{};
     frame.struct_size = sizeof frame;
@@ -1112,7 +1248,13 @@ void tick() {
     if (frame.sim_time < g_first_sim_time + 0.05) return;
     g_frame = frame;
     g_have_frame = true;
-    standin_update(frame);
+    if (g_ground_wait.on) {  // the frames may still show the old drone: Niko stays at the spawn
+        fpv_frame at_spawn = frame;
+        for (int i = 0; i < 3; ++i) at_spawn.position[i] = g_spawn_pos[i];
+        standin_update(at_spawn);
+    } else {
+        standin_update(frame);
+    }
     update_pilot();
     update_pose(frame);
 #if defined(LIBFPV_KAMIKAZE)

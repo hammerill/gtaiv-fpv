@@ -405,8 +405,29 @@ world collision, impacts that ragdoll/damage peds and vehicles.
   drone probe sees a car/ped within 3 m (world::moving_thing_near), and effects logs "no longer exists". Pose:
   pilot::hold adopts a pose already playing instead of restarting it.
 
+- 2026-11-26 00:40: **Cars handled like gtasa-fpv (libfpv INTEGRATION.md "Flying from a car").** With the stand-in on
+  and Niko at the wheel: the car radio is kept on (its station read with GET_PLAYER_RADIO_STATION_INDEX, 255 = off, then
+  SET_MOBILE_RADIO_ENABLED_DURING_GAMEPLAY + SET_MOBILE_PHONE_RADIO_STATE before WARP_CHAR_FROM_CAR_TO_COORD; held
+  and retuned (max 3x) every tick; turned off again after he is back in the car unless the mobile radio was on before).
+  The car is SET_CAR_AS_MISSION_CAR for the stand-in (MARK_CAR_AS_NO_LONGER_NEEDED after, unless a script already
+  owned it), SET_CAR_ON_GROUND_PROPERLY when the 100 m hold ends. The stand-in's end always warps him back into the
+  car (LOAD_SCENE at the car first when going home), so Y moves the car with him: SET_CAR_COORDINATES/HEADING/ON_GROUND
+  and speed 0 at the drone; also with the stand-in off (it used to warp him out). Deployed hot (game running,
+  paused at the time), NOT tested in game per the user.
+
+- 2026-11-26 00:57: **Respawns fell through the map.** User's log: every respawn while standing in far from the spawn
+  (kamikaze "then respawn", R) put the drone on the road at z 1.7 and it sank to -150: the spot's collision had
+  streamed out with Niko at the old drone. Now respawn requests collision + LOAD_SCENE at the spot (his home spot when
+  the spawn is re-measured after the pilot view), puts Niko there at once, and the drone is held on the spawn
+  (fpv_drone_reset every tick, before fpv_drone_tick) until world::raycast finds the ground within 1 m above / 3 m
+  below it, then starts on that ground; after 3 s it is let go with a log line ("spawn: ..."). Stand-in placement uses
+  the spawn, not the stale frames, while it waits. Launches go through the same check. Deployed hot, not tested in
+  game.
+
 ## Next session — start here
 0. Ask the user how the fixed build flies with the real radio. Still not checked in game:
+   - cars: the radio playing on while standing in (and no retune static), Y taking the car along (stand-in on and
+     off), the car still there after a long flight, set down cleanly after the 100 m hold;
    - the stand-in: does SET_CHAR_COORDINATES_NO_OFFSET move a frozen Niko, does the copy appear (CREATE_CHAR with
      the player model) in his clothes, does the AI shoot at the drone (log "damage: Niko standing in lost"), does
      Niko land back on his feet / in his car;
